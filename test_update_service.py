@@ -93,6 +93,16 @@ class ParcelUpdateServiceTests(unittest.TestCase):
         )
         self.assertEqual(actual, "ملاحظات علي الحيازة (من فريق العمل)")
 
+    def test_gis_parcel_code_without_spaces_is_detected_automatically(self):
+        resolver = MappingResolver()
+        actual = resolver.find_header(["كودالقطعة"], "كود القطعة")
+        self.assertEqual(actual, "كودالقطعة")
+
+    def test_gis_parcel_code_with_heh_is_detected_automatically(self):
+        resolver = MappingResolver()
+        actual = resolver.find_header(["كودالقطعه"], "كود القطعة")
+        self.assertEqual(actual, "كودالقطعه")
+
 
 if __name__ == "__main__":
     unittest.main()

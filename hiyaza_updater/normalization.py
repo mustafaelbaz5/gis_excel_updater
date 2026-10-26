@@ -22,7 +22,7 @@ def normalized_text(value: Any) -> str:
 
 def normalized_header(value: Any) -> str:
     """Compare headers flexibly: spaces, underscores, and punctuation are not significant."""
-    header = normalized_text(value).replace("_", " ")
+    header = normalized_text(value).replace("_", " ").replace("ة", "ه")
     header = re.sub(r"[^\w\u0600-\u06FF]+", " ", header)
     return re.sub(r"\s+", " ", header).strip()
 
