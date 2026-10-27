@@ -46,6 +46,7 @@ class UpdateReport:
     gis_duplicates: list[str] = field(default_factory=list)
     base_blank_keys: int = 0
     gis_blank_keys: int = 0
+    unresolved_crop_codes: list[tuple[str, str]] = field(default_factory=list)
     details: list[tuple[str, str, Any, Any, str]] = field(default_factory=list)
 
     @property

@@ -28,5 +28,6 @@ def format_summary(report: UpdateReport) -> str:
         f"أكواد مكررة في GIS: {len(report.gis_duplicates)}",
         f"صفوف بكود فارغ في الأساسي: {report.base_blank_keys}",
         f"صفوف بكود فارغ في GIS: {report.gis_blank_keys}",
+        f"أكواد نوع المحصول بلا وصف Domain: {len(report.unresolved_crop_codes)}",
     ])
     return "\n".join(lines)

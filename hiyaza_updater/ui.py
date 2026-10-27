@@ -211,6 +211,7 @@ class HiyazaUpdaterUI(tk.Tk):
         self._base_unmatched_text = self._text_tab("غير مرتبطة في الأساسي")
         self._gis_unmatched_text = self._text_tab("غير مرتبطة في GIS")
         self._duplicates_text = self._text_tab("الأكواد المكررة")
+        self._unresolved_crop_text = self._text_tab("أكواد محاصيل تحتاج مراجعة")
         self._changes_tree = self._changes_tab()
         return card
 
@@ -404,7 +405,7 @@ class HiyazaUpdaterUI(tk.Tk):
         messagebox.showinfo("تم التحديث", f"تم إنشاء النسخة الجديدة بنجاح:\n{output}")
 
     def _clear_report(self):
-        for widget in (self._summary_text, self._base_unmatched_text, self._gis_unmatched_text, self._duplicates_text):
+        for widget in (self._summary_text, self._base_unmatched_text, self._gis_unmatched_text, self._duplicates_text, self._unresolved_crop_text):
             widget.configure(state="normal")
             widget.delete("1.0", "end")
             widget.configure(state="disabled")
@@ -420,6 +421,10 @@ class HiyazaUpdaterUI(tk.Tk):
         self._set_text(
             self._duplicates_text,
             "\n".join(("مكررة في الملف الأساسي:", *report.base_duplicates, "", "مكررة في ملف GIS:", *report.gis_duplicates)),
+        )
+        self._set_text(
+            self._unresolved_crop_text,
+            "\n".join(f"القطعة {parcel}: كود المحصول {code}" for parcel, code in report.unresolved_crop_codes),
         )
         for item in self._changes_tree.get_children():
             self._changes_tree.delete(item)

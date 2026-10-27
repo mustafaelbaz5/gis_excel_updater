@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .crop_values import CropValueResolver
 from .exceptions import SpreadsheetValidationError
 from .mapping import MappingResolver
 from .models import UpdateReport, WorkbookTable
@@ -10,9 +11,15 @@ from .workbook_store import WorkbookStore
 
 
 class ParcelUpdateService:
-    def __init__(self, store: WorkbookStore, mapping_resolver: MappingResolver):
+    def __init__(
+        self,
+        store: WorkbookStore,
+        mapping_resolver: MappingResolver,
+        crop_value_resolver: CropValueResolver | None = None,
+    ):
         self._store = store
         self._mapping_resolver = mapping_resolver
+        self._crop_value_resolver = crop_value_resolver or CropValueResolver(mapping_resolver)
 
     def update(
         self,
@@ -42,6 +49,9 @@ class ParcelUpdateService:
         }
         usage_field = self._mapping_resolver.find_header(base.headers, "نوع الاستخدام")
         crop_field = self._mapping_resolver.find_header(base.headers, "نوع المحصول")
+        crop_type_source = self._mapping_resolver.find_header(gis.headers, "Crop_type")
+        other_crop_type_source = self._mapping_resolver.find_header(gis.headers, "other_crop_type")
+        crop_description_source = self._crop_value_resolver.find_description_header(gis)
         stage_field = self._mapping_resolver.find_header(base.headers, "مراحل النمو")
 
         for parcel, base_rows in base_index.items():
@@ -50,7 +60,18 @@ class ParcelUpdateService:
 
             base_row, gis_row = base_rows[0], gis_index[parcel][0]
             report.eligible_matches += 1
-            changed = self._apply_mapped_values(parcel, base, base_row, gis_row, active_mapping, report)
+            changed = self._apply_mapped_values(
+                parcel,
+                base,
+                base_row,
+                gis_row,
+                active_mapping,
+                report,
+                crop_field,
+                crop_type_source,
+                other_crop_type_source,
+                crop_description_source,
+            )
             changed = self._apply_usage_rule(parcel, base, base_row, usage_field, crop_field, stage_field, report) or changed
             if changed:
                 report.updated_rows += 1
@@ -68,19 +89,70 @@ class ParcelUpdateService:
                 index[parcel].append(row)
         return index, blank_count
 
-    def _apply_mapped_values(self, parcel, base, base_row, gis_row, mapping, report) -> bool:
+    def _apply_mapped_values(
+        self,
+        parcel,
+        base,
+        base_row,
+        gis_row,
+        mapping,
+        report,
+        crop_field,
+        crop_type_source,
+        other_crop_type_source,
+        crop_description_source,
+    ) -> bool:
         changed = False
         for target, source in mapping.items():
             old_value = base_row.get(target)
-            new_value = None if is_blank_source(gis_row.get(source)) else gis_row.get(source)
-            if values_equal(old_value, new_value):
+            new_value, reason, should_update, unresolved_code = self._mapped_value(
+                target,
+                source,
+                gis_row,
+                crop_field,
+                crop_type_source,
+                other_crop_type_source,
+                crop_description_source,
+            )
+            if unresolved_code is not None:
+                report.unresolved_crop_codes.append((parcel, unresolved_code))
+            if not should_update or values_equal(old_value, new_value):
                 continue
             self._store.write_cell(base, base_row, target, new_value)
             report.changes_by_field[target] += 1
             report.blank_changes_by_field[target] += int(is_blank_source(new_value))
-            report.details.append((parcel, target, old_value, new_value, "تحديث من GIS"))
+            report.details.append((parcel, target, old_value, new_value, reason))
             changed = True
         return changed
+
+    def _mapped_value(
+        self,
+        target,
+        source,
+        gis_row,
+        crop_field,
+        crop_type_source,
+        other_crop_type_source,
+        crop_description_source,
+    ):
+        if target == crop_field:
+            resolution = self._crop_value_resolver.resolve(
+                gis_row,
+                source,
+                crop_type_source,
+                other_crop_type_source,
+                crop_description_source,
+            )
+            return (
+                resolution.value,
+                resolution.reason,
+                resolution.should_update,
+                resolution.unresolved_code,
+            )
+
+        source_value = gis_row.get(source)
+        new_value = None if is_blank_source(source_value) else source_value
+        return new_value, "تحديث من GIS", True, None
 
     def _apply_usage_rule(self, parcel, base, row, usage_field, crop_field, stage_field, report) -> bool:
         if not usage_field or normalized_text(row.get(usage_field)) not in {"بور", "مباني"}:

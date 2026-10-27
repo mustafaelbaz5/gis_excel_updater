@@ -60,6 +60,99 @@ class ParcelUpdateServiceTests(unittest.TestCase):
         self.assertIsNone(row["ملاحظات على الحيازة (من فريق العمل)"])
         self.assertEqual(report.rule_changes, 2)
 
+    def test_numeric_crop_type_uses_domain_description_when_available(self):
+        base = WorkbookTable(
+            Path("base.xlsx"),
+            ["كود القطعة", "نوع المحصول"],
+            [{"كود القطعة": "41", "نوع المحصول": "قديم"}],
+        )
+        gis = WorkbookTable(
+            Path("gis.xlsx"),
+            ["كودالقطعة", "Crop_type", "d_Crop_type"],
+            [{"كودالقطعة": "41", "Crop_type": 7, "d_Crop_type": "ذرة صفراء"}],
+        )
+
+        report = self.service.update(
+            base,
+            gis,
+            "كود القطعة",
+            "كودالقطعة",
+            {"نوع المحصول": "Crop_type"},
+        )
+
+        self.assertEqual(base.rows[0]["نوع المحصول"], "ذرة صفراء")
+        self.assertEqual(report.unresolved_crop_codes, [])
+        self.assertIn("وصف Domain", report.details[0][4])
+
+    def test_numeric_crop_type_without_description_is_reported_and_not_written(self):
+        base = WorkbookTable(
+            Path("base.xlsx"),
+            ["كود القطعة", "نوع المحصول"],
+            [{"كود القطعة": "42", "نوع المحصول": "قمح"}],
+        )
+        gis = WorkbookTable(
+            Path("gis.xlsx"),
+            ["كودالقطعة", "Crop_type"],
+            [{"كودالقطعة": "42", "Crop_type": 7}],
+        )
+
+        report = self.service.update(
+            base,
+            gis,
+            "كود القطعة",
+            "كودالقطعة",
+            {"نوع المحصول": "Crop_type"},
+        )
+
+        self.assertEqual(base.rows[0]["نوع المحصول"], "قمح")
+        self.assertEqual(report.unresolved_crop_codes, [("42", "7")])
+        self.assertEqual(report.changed_cells, 0)
+
+    def test_other_crop_type_fills_crop_type_when_primary_is_blank(self):
+        base = WorkbookTable(
+            Path("base.xlsx"),
+            ["كود القطعة", "نوع المحصول"],
+            [{"كود القطعة": "31", "نوع المحصول": "قديم"}],
+        )
+        gis = WorkbookTable(
+            Path("gis.xlsx"),
+            ["كودالقطعة", "Crop_type", "other_crop_type"],
+            [{"كودالقطعة": "31", "Crop_type": "NULL", "other_crop_type": "بنجر السكر"}],
+        )
+
+        report = self.service.update(
+            base,
+            gis,
+            "كود القطعة",
+            "كودالقطعة",
+            {"نوع المحصول": "Crop_type"},
+        )
+
+        self.assertEqual(base.rows[0]["نوع المحصول"], "بنجر السكر")
+        self.assertEqual(report.details[0][4], "تحديث من other_crop_type (بديل Crop_type)")
+
+    def test_crop_type_has_priority_over_other_crop_type(self):
+        base = WorkbookTable(
+            Path("base.xlsx"),
+            ["كود القطعة", "نوع المحصول"],
+            [{"كود القطعة": "32", "نوع المحصول": "قديم"}],
+        )
+        gis = WorkbookTable(
+            Path("gis.xlsx"),
+            ["كودالقطعه", "Crop_type", "other_crop_type"],
+            [{"كودالقطعه": "32", "Crop_type": "ذرة", "other_crop_type": "بنجر السكر"}],
+        )
+
+        self.service.update(
+            base,
+            gis,
+            "كود القطعة",
+            "كودالقطعه",
+            {"نوع المحصول": "Crop_type"},
+        )
+
+        self.assertEqual(base.rows[0]["نوع المحصول"], "ذرة")
+
     def test_duplicate_code_is_reported_and_left_unchanged(self):
         base = WorkbookTable(Path("base.xlsx"), ["كود القطعة", "اسم الحوض"], [
             {"كود القطعة": "4", "اسم الحوض": "أ", "__excel_row__": 2},
@@ -116,6 +209,27 @@ class ParcelUpdateServiceTests(unittest.TestCase):
 
         self.assertEqual(len(errors), 1)
         self.assertIn("اسم الحوض", errors[0])
+
+    def test_automatic_mapping_keeps_basin_name_separate_from_basin_code(self):
+        base = WorkbookTable(
+            Path("base.xlsx"),
+            ["كود القطعة", "اسم الحوض", "كود الحوض", "نوع المحصول"],
+            [{"كود القطعة": "21", "اسم الحوض": "قديم", "كود الحوض": "1", "نوع المحصول": "قديم"}],
+        )
+        gis = WorkbookTable(
+            Path("gis.xlsx"),
+            ["كودالقطعه", "Basin_Code", "Basin_Name", "Crop_type"],
+            [{"كودالقطعه": "21", "Basin_Code": 55, "Basin_Name": "حوض النخيل", "Crop_type": "قمح"}],
+        )
+        resolver = MappingResolver()
+        choices, base_key, gis_key = resolver.resolve_defaults(base, gis)
+        mapping = {choice.base_header: choice.suggested_gis_header for choice in choices if choice.base_header}
+        report = self.service.update(base, gis, base_key, gis_key, mapping)
+
+        self.assertEqual(base.rows[0]["اسم الحوض"], "حوض النخيل")
+        self.assertEqual(base.rows[0]["كود الحوض"], 55)
+        self.assertEqual(base.rows[0]["نوع المحصول"], "قمح")
+        self.assertEqual(report.updated_rows, 1)
 
 
 if __name__ == "__main__":

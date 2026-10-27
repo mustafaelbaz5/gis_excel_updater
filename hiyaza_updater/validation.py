@@ -12,7 +12,6 @@ class MappingContentValidator:
 
     _TEXT_REQUIRED_FIELDS = {
         "اسم الحوض": "اسم الحوض",
-        "نوع المحصول": "نوع المحصول",
     }
 
     def __init__(self, mapping_resolver: MappingResolver):
