@@ -11,6 +11,7 @@ from .mapping import MappingResolver
 from .models import MappingChoice, UpdateReport, WorkbookTable
 from .reporting import format_summary
 from .update_service import ParcelUpdateService
+from .validation import MappingContentValidator
 from .workbook_store import WorkbookStore
 
 
@@ -69,11 +70,13 @@ class HiyazaUpdaterUI(tk.Tk):
         workbook_store: WorkbookStore,
         mapping_resolver: MappingResolver,
         update_service: ParcelUpdateService,
+        mapping_validator: MappingContentValidator,
     ):
         super().__init__()
         self._store = workbook_store
         self._mapping_resolver = mapping_resolver
         self._update_service = update_service
+        self._mapping_validator = mapping_validator
         self._base: WorkbookTable | None = None
         self._gis: WorkbookTable | None = None
         self._mapping_choices: list[MappingChoice] = []
@@ -289,7 +292,7 @@ class HiyazaUpdaterUI(tk.Tk):
         self._mapping_body.columnconfigure(0, weight=2)
         self._mapping_body.columnconfigure(1, weight=2)
         self._mapping_body.columnconfigure(2, weight=1)
-        for column, label in enumerate(("الحقل في الأساسي", "العمود المقابل من GIS", "الحالة")):
+        for column, label in enumerate(("الحقل في الأساسي", "العمود المقابل من GIS", "الحالة / مثال")):
             ttk.Label(self._mapping_body, text=label, style="CardTitle.TLabel", anchor="e").grid(row=0, column=column, sticky="ew", padx=8, pady=(0, 6))
 
         key_card = ttk.Frame(self._mapping_body, style="Card.TFrame")
@@ -326,7 +329,8 @@ class HiyazaUpdaterUI(tk.Tk):
             elif value.get() == SKIP_UPDATE_LABEL:
                 state.configure(text="لن يتم تحديثه", foreground=PALETTE["warning"])
             else:
-                state.configure(text="جاهز للتحديث", foreground=PALETTE["success"])
+                example = self._mapping_validator.example_value(self._gis, value.get())
+                state.configure(text=f"جاهز — مثال: {example}", foreground=PALETTE["success"])
 
         value.trace_add("write", refresh_state)
         refresh_state()
@@ -346,8 +350,15 @@ class HiyazaUpdaterUI(tk.Tk):
         messagebox.showerror("كود القطعة", "اختر عمود كود القطعة في الملفين أولًا.")
         return False
 
+    def _has_safe_mapping(self) -> bool:
+        errors = self._mapping_validator.validate(self._base, self._gis, self._selected_mapping())
+        if not errors:
+            return True
+        messagebox.showerror("راجع ربط الأعمدة", "\n\n".join(errors))
+        return False
+
     def _inspect(self):
-        if not self._has_valid_key_selection():
+        if not self._has_valid_key_selection() or not self._has_safe_mapping():
             return
         try:
             report = self._update_service.update(
@@ -365,7 +376,7 @@ class HiyazaUpdaterUI(tk.Tk):
         self._action_status.configure(text="اكتمل الفحص. يمكنك الآن إنشاء النسخة الجديدة.")
         
     def _update_and_save(self):
-        if not self._has_valid_key_selection():
+        if not self._has_valid_key_selection() or not self._has_safe_mapping():
             return
         if not messagebox.askyesno(
             "تأكيد إنشاء النسخة",

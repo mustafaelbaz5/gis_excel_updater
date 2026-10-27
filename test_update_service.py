@@ -5,6 +5,7 @@ from hiyaza_updater.constants import BASE_TO_GIS_DEFAULTS
 from hiyaza_updater.mapping import MappingResolver
 from hiyaza_updater.models import WorkbookTable
 from hiyaza_updater.update_service import ParcelUpdateService
+from hiyaza_updater.validation import MappingContentValidator
 from hiyaza_updater.workbook_store import WorkbookStore
 
 
@@ -102,6 +103,19 @@ class ParcelUpdateServiceTests(unittest.TestCase):
         resolver = MappingResolver()
         actual = resolver.find_header(["كودالقطعه"], "كود القطعة")
         self.assertEqual(actual, "كودالقطعه")
+
+    def test_numeric_basin_column_is_blocked_as_a_name_source(self):
+        base = WorkbookTable(Path("base.xlsx"), ["كود القطعة", "اسم الحوض"], [])
+        gis = WorkbookTable(Path("gis.xlsx"), ["Basin_Code"], [
+            {"Basin_Code": 101},
+            {"Basin_Code": 102},
+        ])
+        validator = MappingContentValidator(MappingResolver())
+
+        errors = validator.validate(base, gis, {"اسم الحوض": "Basin_Code"})
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("اسم الحوض", errors[0])
 
 
 if __name__ == "__main__":
