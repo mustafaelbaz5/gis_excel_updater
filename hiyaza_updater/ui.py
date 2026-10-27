@@ -83,6 +83,12 @@ class HiyazaUpdaterUI(tk.Tk):
         self._mapping_values: dict[str, tk.StringVar] = {}
         self._base_key = tk.StringVar()
         self._gis_key = tk.StringVar()
+        self._last_report: UpdateReport | None = None
+        self._report_window: tk.Toplevel | None = None
+        self._all_change_details: list[tuple] = []
+        self._field_filter_values: dict[str, tk.BooleanVar] = {}
+        self._field_filter_label = tk.StringVar(value="كل الحقول")
+        self._change_search = tk.StringVar()
 
         self.title("مُحدِّث بيانات الحيازات من GIS")
         self.geometry("1170x820")
@@ -116,30 +122,28 @@ class HiyazaUpdaterUI(tk.Tk):
         return ttk.Frame(parent, style="Card.TFrame", padding=padding)
 
     def _build_screen(self):
-        page = ScrollablePage(self)
-        page.pack(fill="both", expand=True)
-        content = page.content
+        content = ttk.Frame(self, style="Page.TFrame", padding=(26, 20, 26, 22))
+        content.pack(fill="both", expand=True)
         content.columnconfigure(0, weight=1)
 
-        header = ttk.Frame(content, style="Page.TFrame", padding=(26, 22, 26, 12))
+        header = ttk.Frame(content, style="Page.TFrame")
         header.grid(row=0, column=0, sticky="ew")
         ttk.Label(header, text="مُحدِّث بيانات الحيازات من GIS", style="Title.TLabel", anchor="e").pack(fill="x")
         ttk.Label(
             header,
-            text="حمّل الملفين، راجع التركيب التلقائي، ثم أنشئ نسخة جديدة آمنة من الملف الأساسي.",
+            text="اختيار الملفين، ربط الأعمدة في شبكة مختصرة، ثم المراجعة من نافذة تقرير مستقلة.",
             style="PageText.TLabel",
             anchor="e",
-        ).pack(fill="x", pady=(4, 0))
+        ).pack(fill="x", pady=(3, 0))
 
-        steps = ttk.Frame(content, style="Page.TFrame", padding=(26, 0, 26, 14))
-        steps.grid(row=1, column=0, sticky="ew")
-        for title in ("1  اختيار الملفات", "2  مراجعة الأعمدة", "3  فحص وتحديث"):
+        steps = ttk.Frame(content, style="Page.TFrame")
+        steps.grid(row=1, column=0, sticky="ew", pady=(12, 10))
+        for title in ("1 اختيار الملفات", "2 ربط الأعمدة", "3 مراجعة التقرير"):
             ttk.Label(steps, text=title, style="Step.TLabel").pack(side="right", padx=(8, 0))
 
-        self._build_files_card(content).grid(row=2, column=0, sticky="ew", padx=26)
-        self._build_mapping_card(content).grid(row=3, column=0, sticky="nsew", padx=26, pady=(14, 0))
-        self._build_actions(content).grid(row=4, column=0, sticky="ew", padx=26, pady=(14, 0))
-        self._build_report_card(content).grid(row=5, column=0, sticky="nsew", padx=26, pady=(14, 26))
+        self._build_files_card(content).grid(row=2, column=0, sticky="ew")
+        self._build_mapping_card(content).grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self._build_actions(content).grid(row=4, column=0, sticky="ew", pady=(12, 0))
 
     def _build_files_card(self, parent):
         card = self._card(parent)
@@ -178,7 +182,7 @@ class HiyazaUpdaterUI(tk.Tk):
         return self._mapping_card
 
     def _build_actions(self, parent):
-        card = self._card(parent, padding=14)
+        card = self._card(parent, padding=13)
         self._update_button = ttk.Button(
             card,
             text="تحديث وإنشاء نسخة جديدة",
@@ -187,16 +191,20 @@ class HiyazaUpdaterUI(tk.Tk):
             state="disabled",
         )
         self._update_button.pack(side="right")
+        self._report_button = ttk.Button(card, text="فتح التقرير الأخير", command=self._open_last_report, state="disabled")
+        self._report_button.pack(side="right", padx=(0, 8))
         self._inspect_button = ttk.Button(
             card,
-            text="فحص البيانات أولًا",
+            text="فحص وفتح التقرير",
             command=self._inspect,
             style="Primary.TButton",
             state="disabled",
         )
         self._inspect_button.pack(side="right", padx=(0, 8))
-        self._action_status = ttk.Label(card, text="الملف الأصلي محمي؛ الأداة تنشئ نسخة جديدة فقط.", style="CardText.TLabel", anchor="e")
-        self._action_status.pack(side="right", fill="x", expand=True, padx=(14, 0))
+        self._rematch_button = ttk.Button(card, text="إعادة الربط التلقائي", command=self._reset_auto_mapping, state="disabled")
+        self._rematch_button.pack(side="right", padx=(0, 8))
+        self._action_status = ttk.Label(card, text="الملف الأصلي محمي؛ يتم حفظ نسخة جديدة فقط.", style="CardText.TLabel", anchor="e")
+        self._action_status.pack(side="left", fill="x", expand=True, padx=(14, 0))
         return card
 
     def _build_report_card(self, parent):
@@ -229,17 +237,35 @@ class HiyazaUpdaterUI(tk.Tk):
     def _changes_tab(self):
         tab = ttk.Frame(self._tabs, style="Card.TFrame", padding=8)
         self._tabs.add(tab, text="تفاصيل التغييرات")
+        tab.rowconfigure(1, weight=1)
+        tab.columnconfigure(0, weight=1)
+
+        toolbar = ttk.Frame(tab, style="Card.TFrame")
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 7))
+        ttk.Button(toolbar, text="نسخ أكواد القطع المحددة", command=self._copy_selected_change_codes).pack(side="right")
+        ttk.Button(toolbar, text="نسخ الأكواد الظاهرة", command=self._copy_visible_change_codes, style="Primary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Label(toolbar, text="بحث بكود القطعة", style="CardText.TLabel").pack(side="right", padx=(20, 6))
+        ttk.Entry(toolbar, textvariable=self._change_search, width=16, justify="right").pack(side="right")
+        self._field_filter_button = ttk.Menubutton(toolbar, textvariable=self._field_filter_label, width=18)
+        self._field_filter_button.pack(side="right", padx=(14, 6))
+        ttk.Label(toolbar, text="الحقول", style="CardText.TLabel").pack(side="right")
+        self._filter_status = ttk.Label(toolbar, text="", style="CardText.TLabel")
+        self._filter_status.pack(side="left", fill="x", expand=True)
+        self._change_search.trace_add("write", lambda *_: self._apply_change_filters())
+
         columns = ("code", "field", "old", "new", "reason")
-        tree = ttk.Treeview(tab, columns=columns, show="headings")
+        tree = ttk.Treeview(tab, columns=columns, show="headings", selectmode="extended")
         labels = ("كود القطعة", "الحقل", "القيمة القديمة", "القيمة الجديدة", "السبب")
-        widths = (130, 210, 180, 180, 150)
+        widths = (130, 210, 190, 190, 210)
         for column, label, width in zip(columns, labels, widths):
             tree.heading(column, text=label, anchor="e")
-            tree.column(column, width=width, anchor="e")
-        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-        tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+            tree.column(column, width=width, anchor="e", minwidth=100)
+        vertical = ttk.Scrollbar(tab, orient="vertical", command=tree.yview)
+        horizontal = ttk.Scrollbar(tab, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        tree.grid(row=1, column=0, sticky="nsew")
+        vertical.grid(row=1, column=1, sticky="ns")
+        horizontal.grid(row=2, column=0, sticky="ew")
         return tree
 
     def _choose_file(self):
@@ -282,39 +308,59 @@ class HiyazaUpdaterUI(tk.Tk):
         if self._base and self._gis:
             self._show_mapping()
 
-    def _show_mapping(self):
+    def _show_mapping(self, preserved_mapping: dict[str, str | None] | None = None, preserved_keys: tuple[str, str] | None = None):
         for child in self._mapping_body.winfo_children():
             child.destroy()
         self._mapping_values.clear()
         self._mapping_choices, default_base_key, default_gis_key = self._mapping_resolver.resolve_defaults(self._base, self._gis)
-        self._base_key.set(default_base_key or "")
-        self._gis_key.set(default_gis_key or "")
+        saved_base_key, saved_gis_key = preserved_keys or ("", "")
+        self._base_key.set(saved_base_key if saved_base_key in self._base.headers else (default_base_key or ""))
+        self._gis_key.set(saved_gis_key if saved_gis_key in self._gis.headers else (default_gis_key or ""))
 
-        self._mapping_body.columnconfigure(0, weight=2)
-        self._mapping_body.columnconfigure(1, weight=2)
-        self._mapping_body.columnconfigure(2, weight=1)
-        for column, label in enumerate(("الحقل في الأساسي", "العمود المقابل من GIS", "الحالة / مثال")):
-            ttk.Label(self._mapping_body, text=label, style="CardTitle.TLabel", anchor="e").grid(row=0, column=column, sticky="ew", padx=8, pady=(0, 6))
-
-        key_card = ttk.Frame(self._mapping_body, style="Card.TFrame")
-        key_card.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+        for column in range(3):
+            self._mapping_body.columnconfigure(column, weight=1, uniform="mapping")
+        key_card = ttk.Frame(self._mapping_body, style="Card.TFrame", padding=8)
+        key_card.grid(row=0, column=0, columnspan=3, sticky="ew", padx=3, pady=(0, 5))
         key_card.columnconfigure(1, weight=1)
         key_card.columnconfigure(3, weight=1)
-        ttk.Label(key_card, text="كود القطعة في الملف الأساسي", style="CardText.TLabel").grid(row=0, column=0, padx=(0, 6))
+        ttk.Label(key_card, text="كود القطعة في الأساسي", style="CardText.TLabel").grid(row=0, column=0, padx=(0, 6))
         ttk.Combobox(key_card, textvariable=self._base_key, values=self._base.headers, state="readonly").grid(row=0, column=1, sticky="ew", padx=(0, 16))
-        ttk.Label(key_card, text="كود القطعة في ملف GIS", style="CardText.TLabel").grid(row=0, column=2, padx=(0, 6))
+        ttk.Label(key_card, text="كود القطعة في GIS", style="CardText.TLabel").grid(row=0, column=2, padx=(0, 6))
         ttk.Combobox(key_card, textvariable=self._gis_key, values=self._gis.headers, state="readonly").grid(row=0, column=3, sticky="ew")
 
         options = [SKIP_UPDATE_LABEL, *self._gis.headers]
-        for row_number, choice in enumerate(self._mapping_choices, start=2):
-            self._add_mapping_row(row_number, choice, options)
+        for index, choice in enumerate(self._mapping_choices):
+            selected = preserved_mapping.get(choice.base_header) if preserved_mapping and choice.base_header else None
+            self._add_mapping_tile(index, choice, options, selected)
 
-        self._mapping_note.configure(
-            text="تم اقتراح الربط تلقائيًا. لو وجدت عمود GIS غير صحيح، بدّله من القائمة قبل الفحص."
-        )
+        self._mapping_note.configure(text="ترتيب العمل ثابت: الحقل في الأساسي ثم العمود المقابل في GIS. يمكنك التصحيح يدويًا أو إعادة الربط التلقائي.")
         self._inspect_button.configure(state="normal")
         self._update_button.configure(state="normal")
+        self._rematch_button.configure(state="normal")
         self._clear_report()
+
+    def _add_mapping_tile(self, index, choice, options, selected):
+        row, column = divmod(index, 3)
+        tile = ttk.Frame(self._mapping_body, style="Card.TFrame", padding=(9, 7))
+        tile.grid(row=row + 1, column=column, sticky="nsew", padx=3, pady=3)
+        value = tk.StringVar(value=selected if selected in self._gis.headers else (choice.suggested_gis_header or SKIP_UPDATE_LABEL))
+        self._mapping_values[choice.target_label] = value
+        ttk.Label(tile, text=choice.target_label, style="CardTitle.TLabel", anchor="e").pack(fill="x")
+        ttk.Combobox(tile, textvariable=value, values=options, state="readonly").pack(fill="x", pady=(4, 2))
+        state = ttk.Label(tile, style="CardText.TLabel", anchor="e")
+        state.pack(fill="x")
+
+        def refresh_state(*_args):
+            if not choice.base_header:
+                state.configure(text="غير موجود في الأساسي", foreground=PALETTE["danger"])
+            elif value.get() == SKIP_UPDATE_LABEL:
+                state.configure(text="لن يتم تحديثه", foreground=PALETTE["warning"])
+            else:
+                example = self._mapping_validator.example_value(self._gis, value.get())
+                state.configure(text=f"مثال: {example}", foreground=PALETTE["success"])
+
+        value.trace_add("write", refresh_state)
+        refresh_state()
 
     def _add_mapping_row(self, row_number, choice, options):
         value = tk.StringVar(value=choice.suggested_gis_header or SKIP_UPDATE_LABEL)
@@ -374,8 +420,17 @@ class HiyazaUpdaterUI(tk.Tk):
             return
 
         self._show_report(report, "تقرير فحص قبل التنفيذ")
-        self._action_status.configure(text="اكتمل الفحص. يمكنك الآن إنشاء النسخة الجديدة.")
-        
+        self._action_status.configure(text="اكتمل الفحص. راجع التغييرات في نافذة التقرير.")
+
+    def _reset_auto_mapping(self):
+        """Discard manual column choices and recalculate only the automatic column links."""
+        if not self._base or not self._gis:
+            return
+        self._show_mapping()
+        self._action_status.configure(
+            text="تمت إعادة الربط التلقائي للأعمدة. راجع الخانات ثم اضغط «فحص وفتح التقرير».",
+        )
+
     def _update_and_save(self):
         if not self._has_valid_key_selection() or not self._has_safe_mapping():
             return
@@ -405,32 +460,110 @@ class HiyazaUpdaterUI(tk.Tk):
         messagebox.showinfo("تم التحديث", f"تم إنشاء النسخة الجديدة بنجاح:\n{output}")
 
     def _clear_report(self):
-        for widget in (self._summary_text, self._base_unmatched_text, self._gis_unmatched_text, self._duplicates_text, self._unresolved_crop_text):
-            widget.configure(state="normal")
-            widget.delete("1.0", "end")
-            widget.configure(state="disabled")
-        for item in self._changes_tree.get_children():
-            self._changes_tree.delete(item)
-        self._report_note.configure(text="نفّذ الفحص لإظهار نتائج الربط قبل إنشاء النسخة الجديدة.")
+        self._last_report = None
+        self._all_change_details = []
+        self._report_button.configure(state="disabled")
+        if self._report_window and self._report_window.winfo_exists():
+            self._report_window.destroy()
+        self._report_window = None
+
+    def _ensure_report_window(self):
+        if self._report_window and self._report_window.winfo_exists():
+            return
+        self._report_window = tk.Toplevel(self)
+        self._report_window.title("مراجعة تقرير التحديث")
+        self._report_window.geometry("1240x780")
+        self._report_window.minsize(940, 600)
+        self._report_window.configure(bg=PALETTE["page"])
+        self._report_window.protocol("WM_DELETE_WINDOW", self._close_report_window)
+        holder = ttk.Frame(self._report_window, style="Page.TFrame", padding=(18, 16))
+        holder.pack(fill="both", expand=True)
+        self._build_report_card(holder).pack(fill="both", expand=True)
+
+    def _close_report_window(self):
+        if self._report_window:
+            self._report_window.destroy()
+        self._report_window = None
+
+    def _open_last_report(self):
+        if self._last_report:
+            self._show_report(self._last_report, "آخر تقرير")
 
     def _show_report(self, report: UpdateReport, title: str):
+        self._last_report = report
+        self._report_button.configure(state="normal")
+        self._ensure_report_window()
         self._report_note.configure(text=title)
         self._set_text(self._summary_text, format_summary(report))
         self._set_text(self._base_unmatched_text, "\n".join(report.base_without_match))
         self._set_text(self._gis_unmatched_text, "\n".join(report.gis_without_match))
-        self._set_text(
-            self._duplicates_text,
-            "\n".join(("مكررة في الملف الأساسي:", *report.base_duplicates, "", "مكررة في ملف GIS:", *report.gis_duplicates)),
-        )
-        self._set_text(
-            self._unresolved_crop_text,
-            "\n".join(f"القطعة {parcel}: كود المحصول {code}" for parcel, code in report.unresolved_crop_codes),
-        )
-        for item in self._changes_tree.get_children():
-            self._changes_tree.delete(item)
-        for parcel, field, old, new, reason in report.details:
-            self._changes_tree.insert("", "end", values=(parcel, field, self._value_for_display(old), self._value_for_display(new), reason))
+        self._set_text(self._duplicates_text, "\n".join(("مكررة في الملف الأساسي:", *report.base_duplicates, "", "مكررة في GIS:", *report.gis_duplicates)))
+        self._set_text(self._unresolved_crop_text, "\n".join(f"القطعة {parcel}: كود المحصول {code}" for parcel, code in report.unresolved_crop_codes))
+        self._all_change_details = list(report.details)
+        self._change_search.set("")
+        self._refresh_field_filter_menu()
+        self._apply_change_filters()
         self._tabs.select(0)
+        self._report_window.deiconify()
+        self._report_window.lift()
+        self._report_window.focus_force()
+
+    def _refresh_field_filter_menu(self):
+        self._field_filter_values = {}
+        menu = tk.Menu(self._field_filter_button, tearoff=False)
+        menu.add_command(label="تحديد كل الحقول", command=self._select_all_change_fields)
+        menu.add_command(label="إلغاء التحديد", command=self._clear_change_fields)
+        menu.add_separator()
+        for field in dict.fromkeys(detail[1] for detail in self._all_change_details):
+            value = tk.BooleanVar(value=True)
+            self._field_filter_values[field] = value
+            menu.add_checkbutton(label=field, variable=value, command=self._apply_change_filters)
+        self._field_filter_button.configure(menu=menu)
+
+    def _select_all_change_fields(self):
+        for value in self._field_filter_values.values():
+            value.set(True)
+        self._apply_change_filters()
+
+    def _clear_change_fields(self):
+        for value in self._field_filter_values.values():
+            value.set(False)
+        self._apply_change_filters()
+
+    def _apply_change_filters(self):
+        if not hasattr(self, "_changes_tree"):
+            return
+        selected_fields = {field for field, value in self._field_filter_values.items() if value.get()}
+        query = self._change_search.get().strip().casefold()
+        self._changes_tree.delete(*self._changes_tree.get_children())
+        visible = 0
+        for index, (parcel, field, old, new, reason) in enumerate(self._all_change_details):
+            if field not in selected_fields or (query and query not in str(parcel).casefold()):
+                continue
+            self._changes_tree.insert("", "end", iid=str(index), values=(parcel, field, self._value_for_display(old), self._value_for_display(new), reason))
+            visible += 1
+        total_fields = len(self._field_filter_values)
+        selected_count = len(selected_fields)
+        self._field_filter_label.set("كل الحقول" if selected_count == total_fields else f"{selected_count} حقل محدد")
+        self._filter_status.configure(text=f"عرض {visible} من أصل {len(self._all_change_details)} تغيير")
+
+    def _copy_visible_change_codes(self):
+        codes = [self._changes_tree.item(item, "values")[0] for item in self._changes_tree.get_children()]
+        self._copy_change_codes(codes, "الظاهرة")
+
+    def _copy_selected_change_codes(self):
+        codes = [self._changes_tree.item(item, "values")[0] for item in self._changes_tree.selection()]
+        self._copy_change_codes(codes, "المحددة")
+
+    def _copy_change_codes(self, codes, label):
+        unique_codes = list(dict.fromkeys(str(code) for code in codes))
+        if not unique_codes:
+            messagebox.showinfo("لا توجد أكواد", f"لا توجد قطع {label} لنسخها.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(unique_codes))
+        self.update_idletasks()
+        self._filter_status.configure(text=f"تم نسخ {len(unique_codes)} كود قطعة {label}.")
 
     @staticmethod
     def _value_for_display(value):
